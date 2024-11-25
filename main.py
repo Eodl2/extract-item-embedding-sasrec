@@ -62,17 +62,18 @@ if __name__ == '__main__':
     if args.state_dict_path is not None:
         try:
             model.load_state_dict(torch.load(args.state_dict_path, map_location=torch.device(args.device)))
-            tail = args.state_dict_path[args.state_dict_path.find('epoch=') + 6:]
-            epoch_start_idx = int(tail[:tail.find('.')]) + 1
             print("Model loaded successfully.")
         except Exception as e:
             print(f'Failed loading state_dicts: {e}')
             print('Please check the file path and ensure it is a valid state_dict file.')
             exit(1)
             
-    if args.inference_only:
-        model.eval()
-        with torch.no_grad():
+    # Set the model to evaluation mode for inference
+    model.eval()
+    
+    # Ensure no gradients are calculated during inference
+    with torch.no_grad():
+        if args.inference_only:
             if args.user_item_data is not None and args.rating_data is not None:
                 user_item_df = pd.read_csv(args.user_item_data, sep="\s+", header=None, names=['user_id', 'item_id'])
                 rating_df = pd.read_csv(args.rating_data, sep="::", header=None, names=['user_id', 'item_id', 'rating', 'timestamp'], engine='python')
@@ -80,6 +81,7 @@ if __name__ == '__main__':
 
                 user_embeddings = []
                 print("Processing user-item interactions...")
+
                 for _, row in tqdm(user_item_df.iterrows(), total=len(user_item_df), desc="User-Item Interaction Processing"):
                     user_id = row['user_id']
                     item_id = row['item_id']
@@ -95,9 +97,16 @@ if __name__ == '__main__':
                     # Convert user sequence to tensor
                     user_seq = torch.LongTensor(user_seq).unsqueeze(0).to(args.device)  # Shape: (1, maxlen)
 
-                    # Get user-conditioned item embeddings after passing through all transformer blocks
+                    # Get the index of the target item in the user's history
+                    if item_id in user_seq[0]:
+                        target_index = (user_seq[0] == item_id).nonzero(as_tuple=True)[0].item()
+                    else:
+                        # If item_id is not in the sequence, skip this iteration
+                        continue
+
+                    # Generate embedding for the target item within the user sequence context
                     user_item_embeddings = model.log2feats(user_seq)  # Shape: (1, maxlen, hidden_units)
-                    final_item_embedding = user_item_embeddings[:, -1, :]  # Take the last position embedding
+                    final_item_embedding = user_item_embeddings[:, target_index, :]  # Extract embedding for the target item
 
                     user_embeddings.append([user_id, item_id, rating] + final_item_embedding.squeeze(0).cpu().numpy().tolist())
 
